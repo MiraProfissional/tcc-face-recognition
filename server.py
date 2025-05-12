@@ -1,29 +1,40 @@
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-import threading
-from main_video import recognize_faces, stop_recognition  # Importando o script de reconhecimento
+from fastapi import FastAPI, HTTPException, Query
+from multiprocessing import Process, Event, Manager
+from typing import Dict
+
+from main_video import recognize_faces
 
 app = FastAPI()
+manager = Manager()
 
-stream_thread = None
+class StreamProc:
+    def __init__(self, cam: str):
+        self.stop_evt = Event()
+        self.faces = manager.list()
+        self.proc = Process(
+            target=recognize_faces,
+            args=(cam if not cam.isdigit() else int(cam), self.stop_evt, self.faces),
+            daemon=True,
+        )
+        self.proc.start()
 
-@app.get("/start_stream/")
-async def start_stream():
-    global stream_thread
-    if stream_thread is None or not stream_thread.is_alive():
-        # Criar uma thread para iniciar o reconhecimento
-        stream_thread = threading.Thread(target=recognize_faces)
-        stream_thread.start()
-        return {"message": "Reconhecimento iniciado!"}
-    return {"message": "O reconhecimento já está em andamento."}
+    def stop(self):
+        self.stop_evt.set()
+        self.proc.join(timeout=5)
 
-@app.get("/stop_stream/")
-async def stop_stream():
-    global stop_recognition
-    if stream_thread and stream_thread.is_alive():
-        # Alterando a flag para parar o reconhecimento
-        stop_recognition = True
-        # Espera a thread finalizar a execução
-        stream_thread.join()
-        return {"message": "Reconhecimento interrompido!", "recognized_faces": recognize_faces}
-    return {"message": "Nenhum stream ativo para parar."}
+streams: Dict[str, StreamProc] = {}
+
+@app.post("/start/{turma}")
+async def start_(turma: str, cam: str = Query("/dev/video0")):
+    if turma in streams:
+        raise HTTPException(409, "turma já em execução")
+    streams[turma] = StreamProc(cam)
+    return {"started": turma, "camera": cam}
+
+@app.post("/stop/{turma}")
+async def stop_(turma: str):
+    task = streams.pop(turma, None)
+    if not task:
+        raise HTTPException(404, "turma não encontrada")
+    task.stop()
+    return {"stopped": turma, "faces": list(task.faces)}
