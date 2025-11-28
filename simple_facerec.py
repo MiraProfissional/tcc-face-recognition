@@ -27,13 +27,27 @@ class SimpleFacerec:
         # Store image encoding and names
         for img_path in images_path:
             img = cv2.imread(img_path)
+            
+            # Validar se a imagem foi carregada
+            if img is None:
+                print(f"Warning: Could not load image {img_path}")
+                continue
+                
             rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
             # Get the filename only from the initial file path.
             basename = os.path.basename(img_path)
             (filename, ext) = os.path.splitext(basename)
+            
             # Get encoding
-            img_encoding = face_recognition.face_encodings(rgb_img)[0]
+            encodings = face_recognition.face_encodings(rgb_img)
+            
+            # Validar se encontrou pelo menos uma face
+            if len(encodings) == 0:
+                print(f"Warning: No face found in {img_path}")
+                continue
+                
+            img_encoding = encodings[0]
 
             # Store file name and file encoding
             self.known_face_encodings.append(img_encoding)

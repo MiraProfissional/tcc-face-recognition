@@ -1,47 +1,88 @@
-import os
-import re
 import cv2
-from typing import List
+import time
+import re
+from typing import List, Union
+from multiprocessing.synchronize import Event as EventType
 from simple_facerec import SimpleFacerec
 
-# Extrai os dígitos do começo do rótulo (que costuma ser o nome do arquivo sem extensão).
-# Ex.: "987654323-Vitor-Mira-....jpg" -> "987654323"
-def extract_registration(label: str) -> str | None:
-    # Garante que estamos trabalhando só com o “nome”, caso venha com caminho.
-    base = os.path.basename(label)
-    # Remove extensão, se vier
-    base = os.path.splitext(base)[0]
-    # Pega só os dígitos do começo (mais seguro do que split por "-")
-    m = re.match(r"^(\d+)", base)
-    return m.group(1) if m else None
 
-def recognize_faces(src, stop_evt, faces: List[str], linux_backend: bool = True):
-    # No Linux, CAP_V4L2 ajuda; no Windows use apenas cv2.VideoCapture(src)
-    cap = cv2.VideoCapture(src, cv2.CAP_V4L2) if linux_backend else cv2.VideoCapture(src)
+def extract_registration(label: str) -> str:
+    """Extrai matrícula do label"""
+    match = re.match(r"^(\d+)", label)
+    return match.group(1) if match else None
+
+
+def recognize_faces(src: Union[int, str], stop_evt: EventType, faces: List[str], ready_evt: EventType = None) -> None:
+    print(f"Starting recognition for camera: {src}")
+    
+    # Converter src para int se for string numérica
+    if isinstance(src, str) and src.isdigit():
+        src = int(src)
+    
+    # Abrir câmera
+    cap = cv2.VideoCapture(src)
+    
+    # Configurar timeout e buffer reduzido para resposta rápida ao stop
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    
     if not cap.isOpened():
-        print(f"[ERRO] não abriu {src}")
+        print(f"ERROR: Could not open camera {src}")
+        if ready_evt:
+            ready_evt.clear()  # Sinaliza falha
         return
-
+    
+    print("Camera opened successfully")
+    
+    # Sinalizar que a câmera abriu com sucesso
+    if ready_evt:
+        ready_evt.set()
+    
+    # Carregar faces conhecidas
     sfr = SimpleFacerec()
     sfr.load_encoding_images("images/")
-
+    
+    print("Starting frame processing...")
+    
+    frame_count = 0
+    
     while not stop_evt.is_set():
-        ok, frame = cap.read()
-        if not ok:
+        # Verificar stop antes de ler frame
+        if stop_evt.is_set():
             break
-
-        locs, names = sfr.detect_known_faces(frame)
-
-        for (_, _, _, _), label in zip(locs, names):
-            if not label or label.strip().lower() == "unknown":
+            
+        ret, frame = cap.read()
+        
+        if not ret:
+            # Verificar stop também quando não conseguir ler
+            if stop_evt.is_set():
+                break
+            time.sleep(0.1)
+            continue
+        
+        frame_count += 1
+        
+        # Detectar faces
+        locations, names = sfr.detect_known_faces(frame)
+        
+        # Processar reconhecimentos
+        for label in names:
+            if label == "Unknown":
                 continue
-
-            reg = extract_registration(label)
-            if not reg:
-                # Se por algum motivo o arquivo não começar com dígitos, ignora
-                continue
-
-            if reg not in faces:
-                faces.append(reg)
-
+            
+            registration = extract_registration(label)
+            if registration and registration not in faces:
+                faces.append(registration)
+                print(f"New face recognized: {registration} (total: {len(faces)})")
+        
+        # Log a cada 100 frames
+        if frame_count % 100 == 0:
+            print(f"Frames: {frame_count}, Faces: {len(faces)}")
+        
+        # Verificar stop a cada frame também
+        if stop_evt.is_set():
+            break
+    
+    print(f"Processing finished: {frame_count} frames, {len(faces)} faces")
+    
     cap.release()
+    cv2.destroyAllWindows()
