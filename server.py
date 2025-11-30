@@ -83,7 +83,6 @@ def start_stream(discipline_id: int, cam: str = Query("0")):
             "discipline_id": discipline_id,
             "camera": cam,
             "start_time": start_time.isoformat(),
-            "process_id": proc.pid
         }
         
     except HTTPException:
